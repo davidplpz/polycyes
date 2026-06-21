@@ -1,0 +1,63 @@
+{
+  "name": "polycyes",
+  "version": "0.1.1",
+  "description": "Motor de roles y permisos RBAC + ABAC para TypeScript. Framework-agnostic, extensible via adapters.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./engine": {
+      "types": "./dist/engine.d.ts",
+      "import": "./dist/engine.js"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "import": "./dist/store.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js"
+    },
+    "./helpers": {
+      "types": "./dist/helpers.d.ts",
+      "import": "./dist/helpers.js"
+    },
+    "./memory-store": {
+      "types": "./dist/memory-store.d.ts",
+      "import": "./dist/memory-store.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "authorization",
+    "rbac",
+    "abac",
+    "roles",
+    "permissions",
+    "authz",
+    "security"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "fast-check": "^4.8.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.0"
+  }
+}
