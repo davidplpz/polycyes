@@ -1,6 +1,6 @@
 {
   "name": "polycyes",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Motor de roles y permisos RBAC + ABAC para TypeScript. Framework-agnostic, extensible via adapters.",
   "type": "module",
   "sideEffects": false,
@@ -37,7 +37,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc",
