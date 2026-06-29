@@ -389,7 +389,7 @@ export interface CheckResult {
  * Opciones de configuración del Engine.
  */
 export interface EngineOptions {
-  /** Per-condition timeout en ms (default: 1000) */
+  /** Per-condition timeout en ms (default: 1000, 0 = no timeout) */
   timeoutMs?: number;
 
   /** Si true, errores del store se traducen a allowed:true (default: false) */

@@ -31,6 +31,14 @@
       "types": "./dist/helpers.d.ts",
       "import": "./dist/helpers.js"
     },
+    "./cached-store": {
+      "types": "./dist/cached-store.d.ts",
+      "import": "./dist/cached-store.js"
+    },
+    "./store-decorators": {
+      "types": "./dist/store-decorators.d.ts",
+      "import": "./dist/store-decorators.js"
+    },
     "./memory-store": {
       "types": "./dist/memory-store.d.ts",
       "import": "./dist/memory-store.js"
@@ -43,7 +51,9 @@
   "files": [
     "dist",
     "README.md",
-    "CHANGELOG.md"
+    "README.es.md",
+    "CHANGELOG.md",
+    "CHANGELOG.es.md"
   ],
   "scripts": {
     "build": "tsc",

@@ -19,6 +19,7 @@ import {
   ConditionEvaluationError,
   EmptyConditionArrayError,
   ConditionTimeoutError,
+  InvalidEngineOptionError,
 } from './errors.js';
 import type { EngineOptions } from './types.js';
 
@@ -39,8 +40,8 @@ export class Engine {
       disableRoleHintWarning: options.disableRoleHintWarning ?? false,
       useIndex: options.useIndex ?? true,
     };
-    if (!Number.isFinite(this.options.timeoutMs) || this.options.timeoutMs <= 0) {
-      throw new Error(`Invalid engine option: timeoutMs must be a positive finite number`);
+    if (!Number.isFinite(this.options.timeoutMs) || this.options.timeoutMs < 0) {
+      throw new InvalidEngineOptionError(`timeoutMs must be a non-negative finite number`);
     }
   }
 
@@ -301,22 +302,39 @@ export class Engine {
   // -- resolveRoles --------------------------------------------------------
 
   private async resolveRoles(roleNames: string[]): Promise<Role[]> {
-    const allRoles = await this.store.getRolesByNames(roleNames);
-    const roleMap = new Map(allRoles.map((r) => [r.name, r]));
+    // Phase 1: discover ALL roles via batched getRolesByNames — zero individual getRole calls
+    const roleMap = new Map<string, Role>();
+    let frontier = [...new Set(roleNames)];
+
+    while (frontier.length > 0) {
+      const roles = await this.store.getRolesByNames(frontier);
+      for (const role of roles) {
+        if (!roleMap.has(role.name)) {
+          roleMap.set(role.name, role);
+        }
+      }
+
+      const nextFrontier = new Set<string>();
+      for (const role of roles) {
+        if (!role.inherits) continue;
+        for (const parent of role.inherits) {
+          if (!roleMap.has(parent)) {
+            nextFrontier.add(parent);
+          }
+        }
+      }
+
+      frontier = [...nextFrontier];
+    }
+
+    // Phase 2: resolve from complete roleMap, detect cycles
     const visited = new Set<string>();
     const resolved: Role[] = [];
 
-    const resolveOne = async (name: string, chain: string[]): Promise<void> => {
+    const resolveOne = (name: string, chain: string[]): void => {
       if (visited.has(name)) return;
 
-      let role: Role | undefined = roleMap.get(name);
-      if (!role) {
-        const fromStore = await this.store.getRole(name);
-        if (fromStore) {
-          role = fromStore;
-          roleMap.set(name, role);
-        }
-      }
+      const role = roleMap.get(name);
       if (!role) return;
 
       visited.add(name);
@@ -329,7 +347,7 @@ export class Engine {
           if (chain.length >= MAX_INHERITANCE_DEPTH) {
             throw new HierarchyTooDeepError([...chain, parent]);
           }
-          await resolveOne(parent, [...chain, parent]);
+          resolveOne(parent, [...chain, parent]);
         }
       }
 
@@ -339,7 +357,7 @@ export class Engine {
     };
 
     for (const name of roleNames) {
-      await resolveOne(name, [name]);
+      resolveOne(name, [name]);
     }
 
     return resolved;
@@ -378,19 +396,21 @@ export class Engine {
     try {
       const results = await Promise.all(
         conditions.map(async (c) => {
-          const result = await Promise.race([
-            Promise.resolve(c(ctx)),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new ConditionTimeoutError(permission, timeoutMs)), timeoutMs),
-            ),
-          ]);
-          if (typeof result !== 'boolean') {
+          const raw = timeoutMs > 0
+            ? await Promise.race([
+                Promise.resolve(c(ctx)),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new ConditionTimeoutError(permission, timeoutMs)), timeoutMs),
+                ),
+              ])
+            : await c(ctx);
+          if (typeof raw !== 'boolean') {
             throw new ConditionEvaluationError(
               permission,
-              new TypeError(`Condition returned ${typeof result}, expected boolean`),
+              new TypeError(`Condition returned ${typeof raw}, expected boolean`),
             );
           }
-          return result;
+          return raw;
         }),
       );
       return mode === 'all' ? results.every(Boolean) : results.some(Boolean);

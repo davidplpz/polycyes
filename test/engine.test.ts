@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Engine, InMemoryPolicyStore, role, perm, user } from '../src/index.js';
+import { InvalidEngineOptionError } from '../src/errors.js';
 
 // ============================================================================
 // Tests del Engine — lista para completar cuando se implemente
@@ -286,6 +287,159 @@ describe('Engine', () => {
       });
 
       expect(result.reason).toContain('admin');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // timeoutMs
+  // -----------------------------------------------------------------------
+
+  describe('timeoutMs=0 (no timeout)', () => {
+    it('MUST allow timeoutMs: 0 without throwing', () => {
+      const e = new Engine(store, { timeoutMs: 0 });
+      expect(e).toBeInstanceOf(Engine);
+    });
+
+    it('MUST throw InvalidEngineOptionError for negative timeoutMs', () => {
+      expect(() => new Engine(store, { timeoutMs: -1 })).toThrow(InvalidEngineOptionError);
+    });
+
+    it('MUST reject NaN timeoutMs', () => {
+      expect(() => new Engine(store, { timeoutMs: NaN })).toThrow(InvalidEngineOptionError);
+    });
+
+    it('MUST default to 1000ms when timeoutMs is undefined', () => {
+      const e = new Engine(store);
+      expect(e).toBeInstanceOf(Engine);
+    });
+
+    it('MUST evaluate slow conditions when timeoutMs=0 (no timeout)', async () => {
+      const slowEngine = new Engine(store, { timeoutMs: 0 });
+      const slow: (ctx: { userAttributes?: Record<string, unknown> }) => boolean | Promise<boolean> =
+        async () => {
+          await new Promise((r) => setTimeout(r, 30));
+          return true;
+        };
+
+      await store.addRole(
+        role('slow', {
+          permissions: [perm('post', 'read', { condition: slow })],
+        }),
+      );
+      await store.setUserRoles('usr_1', ['slow']);
+
+      const result = await slowEngine.check({
+        user: user('usr_1', { roles: ['slow'] }),
+        resource: 'post',
+        action: 'read',
+      });
+
+      expect(result.allowed).toBe(true);
+    });
+
+    it('MUST timeout when timeoutMs is set and condition is slow', async () => {
+      const fastEngine = new Engine(store, { timeoutMs: 10 });
+      const slow: (ctx: { userAttributes?: Record<string, unknown> }) => boolean | Promise<boolean> =
+        async () => {
+          await new Promise((r) => setTimeout(r, 100));
+          return true;
+        };
+
+      await store.addRole(
+        role('slow', {
+          permissions: [perm('post', 'read', { condition: slow })],
+        }),
+      );
+      await store.setUserRoles('usr_1', ['slow']);
+
+      await expect(
+        fastEngine.check({
+          user: user('usr_1', { roles: ['slow'] }),
+          resource: 'post',
+          action: 'read',
+        }),
+      ).rejects.toThrow(/timeout/i);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // resolveRoles batch — N+1 prevention
+  // -----------------------------------------------------------------------
+
+  describe('resolveRoles batch (N+1 prevention)', () => {
+    it('MUST NOT call getRole during resolveRoles (zero N+1)', async () => {
+      const spyGetRole = vi.spyOn(store, 'getRole');
+      const spyGetRolesByNames = vi.spyOn(store, 'getRolesByNames');
+
+      const viewer = role('viewer', { permissions: [perm('post', 'read')] });
+      const editor = role('editor', {
+        permissions: [perm('post', 'edit', { scope: 'own' })],
+        inherits: ['viewer'],
+      });
+      const admin = role('admin', {
+        permissions: [perm('post', 'read')],
+        inherits: ['editor'],
+      });
+
+      await store.addRole(viewer);
+      await store.addRole(editor);
+      await store.addRole(admin);
+      await store.setUserRoles('usr_1', ['admin']);
+
+      await engine.check({
+        user: user('usr_1', { roles: ['admin'] }),
+        resource: 'post',
+        action: 'read',
+      });
+
+      expect(spyGetRole).not.toHaveBeenCalled();
+      expect(spyGetRolesByNames).toHaveBeenCalled();
+    });
+
+    it('MUST call getRolesByNames once per level of inheritance depth', async () => {
+      const spyGetRolesByNames = vi.spyOn(store, 'getRolesByNames');
+
+      const a = role('a', { permissions: [] });
+      const b = role('b', { permissions: [], inherits: ['a'] });
+      const c = role('c', { permissions: [], inherits: ['b'] });
+      const d = role('d', { permissions: [], inherits: ['c'] });
+
+      await store.addRole(a);
+      await store.addRole(b);
+      await store.addRole(c);
+      await store.addRole(d);
+      await store.setUserRoles('usr_1', ['d']);
+
+      await engine.check({
+        user: user('usr_1', { roles: ['d'] }),
+        resource: 'post',
+        action: 'read',
+      });
+
+      // 4 levels → 4 calls: d → c → b → a
+      expect(spyGetRolesByNames).toHaveBeenCalledTimes(4);
+    });
+
+    it('MUST handle roles that inherit from same parent (fan-in)', async () => {
+      const spyGetRolesByNames = vi.spyOn(store, 'getRolesByNames');
+
+      const base = role('base', { permissions: [perm('post', 'read')] });
+      const a = role('a', { permissions: [], inherits: ['base'] });
+      const b = role('b', { permissions: [], inherits: ['base'] });
+
+      await store.addRole(base);
+      await store.addRole(a);
+      await store.addRole(b);
+      await store.setUserRoles('usr_1', ['a', 'b']);
+
+      await engine.check({
+        user: user('usr_1', { roles: ['a', 'b'] }),
+        resource: 'post',
+        action: 'read',
+      });
+
+      // Level 0: a,b → Level 1: base = 2 calls (base fetched once via dedup Set)
+      expect(spyGetRolesByNames).toHaveBeenCalledTimes(2);
     });
   });
 });

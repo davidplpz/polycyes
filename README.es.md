@@ -1,13 +1,12 @@
 # polycyes
 
-> **Poly**cyes **i**s **y**our a**c**cess **e**xpression **s**ystem  
-> (or simply "poly" + "yes" — because the permission says yes)
+> **Poly**cyes **i**s **y**our a**c**cess **e**xpression **s**ystem
+> *(o simplemente "poly" + "yes" — porque el permiso dice que sí)*
 
-> **[Español](README.es.md)**
-
-RBAC + ABAC authorization engine for TypeScript. Framework-agnostic, typed,
-testable. No DSLs, no `.conf`, no `policy.csv`. Policies are written in TypeScript
-— with autocompletion, type safety, and zero runtime dependencies.
+Motor de autorización RBAC + ABAC para TypeScript. Framework-agnostic, tipado,
+testeable. Sin DSLs externos, sin `.conf`, sin `policy.csv`. Las políticas se
+definen en TypeScript — con autocompletado, type safety, y zero runtime
+dependencies.
 
 ```bash
 npm install polycyes
@@ -21,7 +20,7 @@ import { Engine, InMemoryPolicyStore, perm, role, user } from 'polycyes';
 const store = new InMemoryPolicyStore();
 const engine = new Engine(store);
 
-// Define roles
+// Definir roles
 await store.addRole(role('viewer', {
   permissions: [perm('post', 'read')],
 }));
@@ -37,7 +36,7 @@ await store.addRole(role('editor', {
 
 await store.setUserRoles('usr_1', ['editor']);
 
-// Evaluate
+// Evaluar
 const result = await engine.check({
   user: user('usr_1', { roles: ['editor'] }),
   resource: 'post',
@@ -51,24 +50,24 @@ console.log(result.reason);  // "granted by role 'editor'"
 
 ## Features
 
-- **RBAC** — roles, permissions, transitive inheritance with cycle detection
-- **ABAC** — conditions as sync or async functions `(ctx) => boolean | Promise<boolean>`
-- **Scopes** — `any`, `own`, `none` + custom scopes (`(ctx) => boolean`)
+- **RBAC** — roles, permisos, herencia transitiva con detección de ciclos
+- **ABAC** — condiciones como funciones síncronas o async `(ctx) => boolean | Promise<boolean>`
+- **Scopes** — `any`, `own`, `none` + scopes custom (`(ctx) => boolean`)
 - **Wildcards** — `perm("*", "*")`, `perm("post", "*")`, `perm("*", "read")`
-- **Deny rules** — `effect: 'deny'` with precedence over allow
-- **Batch** — `engine.checkMany()` with per-user role caching
-- **Filter** — `engine.filter()` for row-level security
-- **Debug** — `engine.debug()` returns `DebugTrace` with per-step evaluation
-- **Cache** — `CachedPolicyStore` with configurable TTL, auto-invalidation, and concurrent request dedup
-- **Decorators** — `LoggingPolicyStore`, `MetricsPolicyStore`, `FailOpenPolicyStore` (composable)
-- **No N+1** — `resolveRoles()` discovers parent roles in batch, zero individual `getRole()` calls
-- **Typed errors** — `ConditionEvaluationError`, `StoreUnavailableError`, `InvalidEngineOptionError`, etc.
-- **Audit** — `auditRole()` detects god-mode wildcards without conditions
-- **Deep freeze** — immutable context prevents side effects in conditions
-- **Timeout** — conditions use `Promise.race` with 1000ms default (0 = no timeout)
+- **Deny rules** — `effect: 'deny'` con precedencia sobre allow
+- **Batch** — `engine.checkMany()` con cache de roles por usuario
+- **Filter** — `engine.filter()` para row-level security
+- **Debug** — `engine.debug()` retorna `DebugTrace` con cada paso de la evaluación
+- **Cache** — `CachedPolicyStore` con TTL configurable, invalidación automática, y dedup de requests concurrentes
+- **Decorators** — `LoggingPolicyStore`, `MetricsPolicyStore`, `FailOpenPolicyStore` (componibles)
+- **Sin N+1** — `resolveRoles()` descubre roles padres en batch, zero calls individuales a `getRole()`
+- **Errores tipados** — `ConditionEvaluationError`, `StoreUnavailableError`, `InvalidEngineOptionError`, etc.
+- **Auditoría** — `auditRole()` detecta god-mode wildcards sin condición
+- **Deep freeze** — contexto inmutable, previene side effects en condiciones
+- **Timeout** — condiciones con `Promise.race` y default 1000ms (0 = sin timeout)
 - **Tree-shakeable** — `"sideEffects": false` + subpath exports
 - **Branded types** — `UserId`, `RoleName`, `ResourceName`, `ActionName`
-- **Express adapter** — `polycyes/express` with `authz()` middleware
+- **Express adapter** — `polycyes/express` con middleware `authz()`
 
 ## ABAC Example
 
@@ -90,46 +89,46 @@ const tenantAdmin = role('tenant-admin', {
 });
 ```
 
-## Custom Scopes
+## Scopes Custom
 
 ```ts
 import { scopeTeam, scopeTenant, scopeOrg } from 'polycyes';
 
-perm('task', 'edit', { scope: scopeTeam })      // same teamId
-perm('project', 'read', { scope: scopeTenant })  // same tenantId
+perm('task', 'edit', { scope: scopeTeam })     // mismo teamId
+perm('project', 'read', { scope: scopeTenant }) // mismo tenantId
 
-// Or define your own:
+// O definí el tuyo:
 const scopeDepartment = (ctx) =>
   ctx.userAttributes?.dept === ctx.resourceAttributes?.dept;
 ```
 
 ## CachedPolicyStore
 
-TTL cache wrapper for any `PolicyStore`. Reduces load on the underlying store
-with zero code changes.
+Wrapper con caché TTL para cualquier `PolicyStore`. Ideal para producción: reduce
+la carga sobre el store subyacente sin cambiar nada más.
 
 ```ts
 import { CachedPolicyStore } from 'polycyes/cached-store';
 
 const store = new CachedPolicyStore({
-  store: myDatabaseStore,  // any PolicyStore
-  ttl: 30_000,             // global TTL (default 30s)
-  roleTtl: 10_000,         // per-type TTL for roles (optional)
-  userRolesTtl: 60_000,    // per-type TTL for user roles (optional)
+  store: myDatabaseStore,  // cualquier PolicyStore
+  ttl: 30_000,             // TTL global (default 30s)
+  roleTtl: 10_000,         // TTL para roles (opcional)
+  userRolesTtl: 60_000,    // TTL para user roles (opcional)
 });
 
-// ttl: 0 disables caching — useful for tests or dev
+// ttl: 0 desactiva el caché — útil en tests o dev
 const devStore = new CachedPolicyStore({ store, ttl: 0 });
 ```
 
-- Per-type TTL: separate expiry for roles vs user roles
-- Auto-invalidation on writes (`addRole`, `updateRole`, etc.)
-- Concurrent request dedup — N requests for the same key = 1 fetch
-- `clearCache()` + `cacheStats()` for monitoring
+- Cache por tipo: TTL distinto para roles vs user roles
+- Invalidación automática en writes (`addRole`, `updateRole`, etc.)
+- Dedup de requests concurrentes — N requests a la misma key = 1 fetch
+- `clearCache()` + `cacheStats()` para monitoreo
 
 ## Store Decorators
 
-Composable wrappers around any `PolicyStore`:
+Componé wrappers alrededor de cualquier `PolicyStore`:
 
 ```ts
 import { MetricsPolicyStore, LoggingPolicyStore, FailOpenPolicyStore }
@@ -142,7 +141,7 @@ const store = new MetricsPolicyStore(
   ),
 );
 
-// Live metrics
+// Métricas en vivo
 store.getMetrics()
 // → { getRole: { count: 150, totalMs: 12.3, errors: 0 }, ... }
 store.resetMetrics();
@@ -150,17 +149,17 @@ store.resetMetrics();
 
 ### LoggingPolicyStore
 
-Logs every operation with timing. Options: `includeArgs`, `includeResult`, custom `logger`.
+Logea cada operación con timing. Opciones: `includeArgs`, `includeResult`, `logger` custom.
 
 ### MetricsPolicyStore
 
-Tracks call count, total time, and errors per method.
-`getMetrics()` returns an immutable snapshot. `resetMetrics()` clears all counters.
+Lleva contador de llamadas, tiempo acumulado y errores por método.
+`getMetrics()` retorna snapshot inmutable. `resetMetrics()` reinicia todo.
 
 ### FailOpenPolicyStore
 
-Implements `PolicyReader` only. Returns `null`/`[]` on store errors instead of
-propagating. For cases where auth should never break the app.
+Implementa solo `PolicyReader`. Si el store lanza error, retorna `null`/`[]`
+en vez de propagarlo. Para casos donde la autorización no debe romper la app.
 
 ## Express Adapter
 
@@ -194,8 +193,8 @@ await engine.debug(input): Promise<DebugTrace>
 
 ```ts
 {
-  timeoutMs?: number;          // default 1000, 0 = no timeout
-  failOpen?: boolean;          // default false (DANGEROUS)
+  timeoutMs?: number;          // default 1000, 0 = sin timeout
+  failOpen?: boolean;          // default false (PELIGROSO)
   useIndex?: boolean;          // default true (O(1) permission lookup)
   disableRoleHintWarning?: boolean; // default false
 }
@@ -203,7 +202,7 @@ await engine.debug(input): Promise<DebugTrace>
 
 ### `PolicyStore`
 
-Implement `PolicyStore` for any backend:
+Implementá `PolicyStore` para cualquier backend:
 
 ```ts
 interface PolicyReader {
@@ -225,11 +224,11 @@ interface PolicyStore extends PolicyReader, PolicyWriter {}
 ## Subpath Exports
 
 ```
-polycyse                     → barrel (everything)
+polycyse                     → barrel (todo)
 polycyes/engine              → Engine
 polycyes/store               → PolicyReader, PolicyWriter, PolicyStore
-polycyes/types               → types (User, Role, Permission, CheckResult, etc.)
-polycyes/errors              → all error classes
+polycyes/types               → tipos (User, Role, Permission, CheckResult, etc.)
+polycyes/errors              → todas las clases de error
 polycyes/helpers             → perm(), role(), user(), scopeTeam, scopeTenant, scopeOrg
 polycyes/memory-store        → InMemoryPolicyStore
 polycyes/cached-store        → CachedPolicyStore + CachedPolicyStoreOptions + CacheStats
@@ -237,6 +236,6 @@ polycyes/store-decorators    → LoggingPolicyStore, MetricsPolicyStore, FailOpe
 polycyes/express             → authz(), ExpressAuthzMapper
 ```
 
-## License
+## Licencia
 
 MIT
