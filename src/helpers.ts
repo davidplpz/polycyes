@@ -32,7 +32,7 @@ export function perm(
   opts?: {
     scope?: PermissionScope;
     effect?: PermissionEffect;
-    condition?: Condition;
+    condition?: Condition | Condition[];
     conditionMode?: ConditionMode;
   },
 ): Permission {
@@ -41,7 +41,9 @@ export function perm(
     action,
     scope: opts?.scope ?? 'any',
     effect: opts?.effect ?? 'allow',
-    condition: opts?.condition,
+    condition: opts?.condition
+      ? (Array.isArray(opts.condition) ? opts.condition : [opts.condition])
+      : undefined,
     conditionMode: opts?.conditionMode ?? 'all',
   };
 }

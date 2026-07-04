@@ -39,10 +39,10 @@ describe('perm()', () => {
     expect(p.scope).toBe(fn);
   });
 
-  it('MUST accept condition as function', () => {
+  it('MUST accept condition as function and normalize to array', () => {
     const cond = () => true;
     const p = perm('post', 'publish', { condition: cond });
-    expect(p.condition).toBe(cond);
+    expect(p.condition).toEqual([cond]);
   });
 
   it('MUST accept condition as array', () => {
@@ -82,7 +82,8 @@ describe('perm()', () => {
     });
     expect(p.scope).toBe('own');
     expect(p.effect).toBe('deny');
-    expect(typeof p.condition).toBe('function');
+    expect(Array.isArray(p.condition)).toBe(true);
+    expect(p.condition).toHaveLength(1);
   });
 });
 

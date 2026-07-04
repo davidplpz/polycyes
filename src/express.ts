@@ -1,4 +1,5 @@
-import type { Engine, CheckInput } from './index.js';
+import type { Engine } from './engine.js';
+import type { CheckInput } from './types.js';
 
 // ============================================================================
 // Express Adapter
@@ -46,13 +47,16 @@ export interface ExpressRequest {
 export function authz(
   engine: Engine,
   mapper: ExpressAuthzMapper,
-): (req: ExpressRequest, res: ExpressResponse, next: ExpressNext) => void {
-  return (req, res, next) => {
-    const input = mapper(req);
-    engine.check(input).then((result) => {
+): (req: ExpressRequest, res: ExpressResponse, next: ExpressNext) => Promise<void> {
+  return async (req, res, next) => {
+    try {
+      const input = mapper(req);
+      const result = await engine.check(input);
       if (result.allowed) return next();
       res.status(403).json({ error: result.reason });
-    }).catch(next);
+    } catch (err) {
+      next(err);
+    }
   };
 }
 

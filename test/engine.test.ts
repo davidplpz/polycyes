@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Engine, InMemoryPolicyStore, role, perm, user } from '../src/index.js';
+import { Engine, createEngine, InMemoryPolicyStore, role, perm, user } from '../src/index.js';
 import { InvalidEngineOptionError } from '../src/errors.js';
 
 // ============================================================================
@@ -440,6 +440,108 @@ describe('Engine', () => {
 
       // Level 0: a,b → Level 1: base = 2 calls (base fetched once via dedup Set)
       expect(spyGetRolesByNames).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('Engine API', () => {
+    it('getStore() MUST return the PolicyReader', () => {
+      const engine = new Engine(store);
+      expect(engine.getStore()).toBe(store);
+    });
+
+    it('getCacheStats() MUST return initial zero stats', () => {
+      const engine = new Engine(store);
+      const stats = engine.getCacheStats();
+      expect(stats.resolvedRoles.size).toBe(0);
+      expect(stats.resolvedRoles.hits).toBe(0);
+      expect(stats.resolvedRoles.misses).toBe(0);
+    });
+
+    it('clearCache() MUST reset stats', () => {
+      const engine = new Engine(store);
+      engine.clearCache();
+      const stats = engine.getCacheStats();
+      expect(stats.resolvedRoles.size).toBe(0);
+      expect(stats.resolvedRoles.hits).toBe(0);
+      expect(stats.resolvedRoles.misses).toBe(0);
+    });
+  });
+
+  describe('Resolved roles cache', () => {
+    it('MUST cache resolved roles per userId within TTL', async () => {
+      const spyGetUserRoles = vi.spyOn(store, 'getUserRoles');
+
+      await store.addRole(role('user', { permissions: [perm('post', 'read')] }));
+      await store.setUserRoles('usr_1', ['user']);
+
+      const cachedEngine = new Engine(store, { resolvedCacheTTL: 5000 });
+
+      // First check: miss, calls getUserRoles
+      await cachedEngine.check({
+        user: user('usr_1', { roles: ['user'] }),
+        resource: 'post',
+        action: 'read',
+      });
+
+      // Second check: hit, should NOT call getUserRoles
+      await cachedEngine.check({
+        user: user('usr_1', { roles: ['user'] }),
+        resource: 'post',
+        action: 'read',
+      });
+
+      // Called exactly once: first call miss, second hit
+      expect(spyGetUserRoles).toHaveBeenCalledTimes(1);
+    });
+
+    it('MUST NOT cache when resolvedCacheTTL=0', async () => {
+      const spyGetUserRoles = vi.spyOn(store, 'getUserRoles');
+
+      await store.addRole(role('user', { permissions: [perm('post', 'read')] }));
+      await store.setUserRoles('usr_1', ['user']);
+
+      const uncachedEngine = new Engine(store, { resolvedCacheTTL: 0 });
+
+      await uncachedEngine.check({
+        user: user('usr_1', { roles: ['user'] }),
+        resource: 'post',
+        action: 'read',
+      });
+
+      await uncachedEngine.check({
+        user: user('usr_1', { roles: ['user'] }),
+        resource: 'post',
+        action: 'read',
+      });
+
+      // Called twice: cache disabled
+      expect(spyGetUserRoles).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('Engine options validation', () => {
+    it('MUST throw on negative resolvedCacheTTL', () => {
+      expect(() => new Engine(store, { resolvedCacheTTL: -1 })).toThrow(InvalidEngineOptionError);
+    });
+
+    it('MUST throw on NaN resolvedCacheTTL', () => {
+      expect(() => new Engine(store, { resolvedCacheTTL: NaN })).toThrow(InvalidEngineOptionError);
+    });
+
+    it('MUST accept resolvedCacheTTL=0 (disabled)', () => {
+      expect(() => new Engine(store, { resolvedCacheTTL: 0 })).not.toThrow();
+    });
+  });
+
+  describe('createEngine factory', () => {
+    it('MUST create an Engine instance', () => {
+      const engine = createEngine(store);
+      expect(engine).toBeInstanceOf(Engine);
+    });
+
+    it('MUST accept options', () => {
+      const engine = createEngine(store, { timeoutMs: 0, resolvedCacheTTL: 0 });
+      expect(engine).toBeInstanceOf(Engine);
     });
   });
 });

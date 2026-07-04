@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`CachedPolicyStore`** — Wrapper con caché TTL para cualquier `PolicyStore`. TTL configurable por tipo (role vs userRoles), invalidación automática en writes, dedup de requests concurrentes, y `clearCache()` + `cacheStats()`. Export: `polycyes/cached-store`
+- **Decoradores de Store** — `LoggingPolicyStore` (logging configurable con timing), `MetricsPolicyStore` (contador de llamadas + totalMs + errores por método), `FailOpenPolicyStore` (retorna null/[] en errores). Export: `polycyes/store-decorators`
+- **`resolveRoles()` batch** — Algoritmo en 2 fases que elimina N+1 en herencia de roles. Fase 1 descubre roles padres mediante `getRolesByNames` (batch), Fase 2 resuelve sincrónicamente. Zero llamadas individuales a `getRole()`.
+- **`timeoutMs: 0`** — Engine acepta `timeoutMs: 0` como "sin timeout". Condiciones se ejecutan sin overhead de `Promise.race`. Valores negativos lanzan `InvalidEngineOptionError`.
+- **Refactor SRP** — `RoleResolver` (resolución batch con detección de ciclos) y `ConditionEvaluator` (timeout, modo, error wrapping) extraídos de `Engine`. Separación de responsabilidades más limpia.
+- **Factory `createEngine()`** — `createEngine(store, opts?)` exportada desde `polycyes`. Equivalente a `new Engine(store, opts)`.
+- **API de monitoreo** — `getStore()` retorna el `PolicyReader` subyacente, `getCacheStats()` retorna estadísticas de cache, `clearCache()` limpia la cache de roles resueltos en Engine.
+- **`EngineOptions.resolvedCacheTTL`** — Cache de roles resueltos a nivel Engine. TTL en ms (default 1000, `0` desactiva). Evita re-resolver herencia en llamadas consecutivas a `check()` para el mismo usuario.
+- **`addUserRole()` / `removeUserRole()`** — Manejo incremental de roles en `PolicyWriter`. Agrega/remueve un rol sin reemplazar todos los roles del usuario. Implementado en `InMemoryPolicyStore`, `CachedPolicyStore` y todos los decoradores.
+- **`engine.filter()` via `checkMany()`** — `filter()` delega a `checkMany()` internamente = 1 fetch al store para todos los recursos, no N.
+- **`matchScope()` con resultado estructurado** — Retorna `{ passed: boolean, reason?: string }` con mensajes de error específicos.
+- **Documentación en español** — `README.es.md` + `CHANGELOG.es.md` con documentación completa.
+
+### Changed
+
+- Engine constructor ahora lanza `InvalidEngineOptionError` en vez de `Error` genérico para opciones inválidas
+- **Cache-antes-store en `evaluate()`** — la cache de roles se verifica ANTES de `getUserRoles()`. Cache hit elimina la llamada al store por completo.
+- **Shallow freeze reemplaza deepFreeze** — `Object.freeze` solo en `user`, `user.attributes`, `resourceInstance`, `resourceInstance.attributes`. Misma protección, sin alocación en hot path.
+- **`debug()` evaluación única** — llama a `evaluate()` una vez y reusa el resultado. No más evaluación doble de condiciones.
+- **Express adapter async** — middleware `authz()` ahora es `async` con `try/catch`. Compatible con Express 4 + 5.
+- **FailOpenPolicyStore implementa PolicyStore completo** — ahora implementa la interfaz `PolicyStore` completa (incluyendo métodos de escritura), corrigiendo violación LSP.
+- **Imports directos en Express adapter** — `express.ts` importa desde archivos fuente, no desde barrel. Sin circular deps.
+
+### Fixed
+
+- Violación LSP en `FailOpenPolicyStore` — ahora implementa `PolicyStore` completo
+- `CachedPolicyStore` cacheStats ahora incluye `addUserRole` y `removeUserRole`
+- `debug()` ya no evalúa condiciones dos veces
+- `resolvedCacheTTL` validado para `NaN` y valores negativos via `InvalidEngineOptionError`
+
 ## 0.1.3 (2026-06-21)
 
 ### Added

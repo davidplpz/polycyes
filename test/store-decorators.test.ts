@@ -5,6 +5,7 @@ import {
   MetricsPolicyStore,
   FailOpenPolicyStore,
 } from '../src/store-decorators.js';
+import { role, perm } from '../src/helpers.js';
 import type { Role } from '../src/types.js';
 
 function makeRoles(): { admin: Role; editor: Role; viewer: Role } {
@@ -240,12 +241,21 @@ describe('FailOpenPolicyStore', () => {
     expect(roles).toEqual(['admin']);
   });
 
-  it('MUST implement only PolicyReader (no write methods)', () => {
+  it('MUST implement PolicyStore (delegate writes to inner)', async () => {
     const inner = new InMemoryPolicyStore({ strictMode: false });
     const store = new FailOpenPolicyStore(inner);
-    expect(store).not.toHaveProperty('addRole');
-    expect(store).not.toHaveProperty('updateRole');
-    expect(store).not.toHaveProperty('deleteRole');
-    expect(store).not.toHaveProperty('setUserRoles');
+    const testRole = role('test', { permissions: [perm('post', 'read')] });
+
+    await store.addRole(testRole);
+    const got = await store.getRole('test');
+    expect(got).not.toBeNull();
+    expect(got!.name).toBe('test');
+
+    await store.setUserRoles('u1', ['test']);
+    const roles = await store.getUserRoles('u1');
+    expect(roles).toEqual(['test']);
+
+    await store.deleteRole('test');
+    expect(await store.getRole('test')).toBeNull();
   });
 });

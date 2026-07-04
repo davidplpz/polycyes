@@ -106,6 +106,26 @@ export class InMemoryPolicyStore implements PolicyStore {
     this.userRoles.set(userId, [...roleNames]);
   }
 
+  async addUserRole(userId: string, roleName: string): Promise<void> {
+    if (!this.roles.has(roleName)) {
+      throw new RoleNotFoundError(roleName);
+    }
+    const current = this.userRoles.get(userId) ?? [];
+    if (!current.includes(roleName)) {
+      this.userRoles.set(userId, [...current, roleName]);
+    }
+  }
+
+  async removeUserRole(userId: string, roleName: string): Promise<void> {
+    const current = this.userRoles.get(userId);
+    if (!current) return;
+    const idx = current.indexOf(roleName);
+    if (idx !== -1) {
+      current.splice(idx, 1);
+      this.userRoles.set(userId, [...current]);
+    }
+  }
+
   // ---- Utility ----
 
   async clear(): Promise<void> {

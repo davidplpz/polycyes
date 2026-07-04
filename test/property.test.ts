@@ -254,6 +254,164 @@ describe('Property: empty condition array throws', () => {
   });
 });
 
+describe('Property: checkMany equivalence with N individual check()', () => {
+  it('MUST produce same results as N individual calls', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom('read', 'write', 'delete'),
+        fc.constantFrom(1, 3, 5),
+        async (action, count) => {
+          const store = storeWithStrictMode(false);
+          const engine = new Engine(store, { resolvedCacheTTL: 0 });
+
+          await store.addRole(
+            role('user', {
+              permissions: [perm('post', action)],
+            }),
+          );
+          await store.setUserRoles('u1', ['user']);
+          await store.setUserRoles('u2', ['user']);
+
+          const inputs = Array.from({ length: count }, (_, i) => ({
+            user: user(i % 2 === 0 ? 'u1' : 'u2', { roles: ['user'] }),
+            resource: 'post',
+            action,
+          }));
+
+          const batch = await engine.checkMany(inputs);
+          const individual = await Promise.all(
+            inputs.map((inp) => engine.check(inp)),
+          );
+
+          expect(batch.length).toBe(individual.length);
+          for (let i = 0; i < batch.length; i++) {
+            expect(batch[i].allowed).toBe(individual[i].allowed);
+            expect(batch[i].reason).toBe(individual[i].reason);
+          }
+        },
+      ),
+    );
+  });
+});
+
+describe('Property: addUserRole / removeUserRole invariants', () => {
+  it('MUST be idempotent — adding same role twice has same effect', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom('read', 'write'),
+        async (action) => {
+          const store = storeWithStrictMode(false);
+          const engine = new Engine(store);
+
+          await store.addRole(
+            role('r1', { permissions: [perm('post', action)] }),
+          );
+          await store.setUserRoles('u1', []);
+
+          await store.addUserRole('u1', 'r1');
+          await store.addUserRole('u1', 'r1');
+
+          const result = await engine.check({
+            user: user('u1'),
+            resource: 'post',
+            action,
+          });
+          expect(result.allowed).toBe(true);
+        },
+      ),
+    );
+  });
+
+  it('MUST be reversible — add + remove = never had it', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom('read', 'write'),
+        async (action) => {
+          const store = storeWithStrictMode(false);
+          const engine = new Engine(store);
+
+          await store.addRole(
+            role('r1', { permissions: [perm('post', action)] }),
+          );
+          await store.setUserRoles('u1', []);
+
+          await store.addUserRole('u1', 'r1');
+          await store.removeUserRole('u1', 'r1');
+
+          const result = await engine.check({
+            user: user('u1'),
+            resource: 'post',
+            action,
+          });
+          expect(result.allowed).toBe(false);
+        },
+      ),
+    );
+  });
+
+  it('MUST be safe — removeUserRole on absent role is no-op', async () => {
+    const store = storeWithStrictMode(false);
+    const engine = new Engine(store);
+
+    await store.addRole(
+      role('r1', { permissions: [perm('post', 'read')] }),
+    );
+    await store.setUserRoles('u1', ['r1']);
+
+    // remove a role the user doesn't have
+    await store.removeUserRole('u1', 'nonexistent');
+
+    const result = await engine.check({
+      user: user('u1'),
+      resource: 'post',
+      action: 'read',
+    });
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('Property: engine resolved cache on/off equivalence', () => {
+  it('MUST produce same results with cache enabled and disabled', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom('post', 'comment'),
+        fc.constantFrom('read', 'write'),
+        async (resource, action) => {
+          const store = storeWithStrictMode(false);
+          const engineCached = new Engine(store, { resolvedCacheTTL: 1000 });
+          const engineNoCache = new Engine(store, { resolvedCacheTTL: 0 });
+
+          await store.addRole(
+            role('user', { permissions: [perm(resource, action)] }),
+          );
+          await store.setUserRoles('u1', ['user']);
+
+          const r1 = await engineCached.check({
+            user: user('u1'),
+            resource,
+            action,
+          });
+          // hit cache on second call
+          const r2 = await engineCached.check({
+            user: user('u1'),
+            resource,
+            action,
+          });
+          const r3 = await engineNoCache.check({
+            user: user('u1'),
+            resource,
+            action,
+          });
+
+          expect(r1.allowed).toBe(r3.allowed);
+          expect(r1.reason).toBe(r3.reason);
+          expect(r1.allowed).toBe(r2.allowed);
+        },
+      ),
+    );
+  });
+});
+
 describe('Property: permission index vs linear scan equivalence', () => {
   it('MUST produce same result with and without index', async () => {
     await fc.assert(

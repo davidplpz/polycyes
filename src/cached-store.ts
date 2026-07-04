@@ -191,4 +191,14 @@ export class CachedPolicyStore implements PolicyStore {
     await this.store.setUserRoles(userId, roleNames);
     this.invalidate(cacheKey('userRoles', userId));
   }
+
+  async addUserRole(userId: string, roleName: string): Promise<void> {
+    await this.store.addUserRole(userId, roleName);
+    this.invalidate(cacheKey('userRoles', userId));
+  }
+
+  async removeUserRole(userId: string, roleName: string): Promise<void> {
+    await this.store.removeUserRole(userId, roleName);
+    this.invalidate(cacheKey('userRoles', userId));
+  }
 }

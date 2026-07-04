@@ -10,75 +10,92 @@ import type {
   DebugStep,
   DebugTrace,
 } from './types.js';
-import type { PolicyReader } from './store.js';
+import type { PolicyReader, PolicyStore } from './store.js';
+import { RoleResolver } from './resolver.js';
+import { ConditionEvaluator } from './conditions.js';
 import {
-  CircularRoleHierarchyError,
-  HierarchyTooDeepError,
   StoreUnavailableError,
   InvalidInputError,
   ConditionEvaluationError,
-  EmptyConditionArrayError,
   ConditionTimeoutError,
+  EmptyConditionArrayError,
   InvalidEngineOptionError,
 } from './errors.js';
 import type { EngineOptions } from './types.js';
 
 declare var console: { warn(...args: unknown[]): void };
-declare function setTimeout(cb: () => void, ms: number): number;
 
-const MAX_INHERITANCE_DEPTH = 50;
+type IndexedPerm = { role: Role; permission: Permission };
+type PermissionIndex = Map<string, Map<string, IndexedPerm[]>>;
+
+interface ResolvedCacheEntry {
+  roles: Role[];
+  index: PermissionIndex | null;
+  expiresAt: number;
+}
+
+export interface EngineCacheStats {
+  resolvedRoles: { size: number; hits: number; misses: number };
+}
+
+const DEFAULT_RESOLVED_TTL = 1000;
 
 export class Engine {
   private readonly store: PolicyReader;
   private readonly options: Required<EngineOptions>;
+  private readonly resolver: RoleResolver;
+  private readonly conditions: ConditionEvaluator;
+
+  private readonly resolvedCache: Map<string, ResolvedCacheEntry>;
+  private cacheHits = 0;
+  private cacheMisses = 0;
 
   constructor(store: PolicyReader, options: EngineOptions = {}) {
     this.store = store;
+    this.resolver = new RoleResolver(store);
+    this.conditions = new ConditionEvaluator();
     this.options = {
       timeoutMs: options.timeoutMs ?? 1000,
       failOpen: options.failOpen ?? false,
       disableRoleHintWarning: options.disableRoleHintWarning ?? false,
       useIndex: options.useIndex ?? true,
+      resolvedCacheTTL: options.resolvedCacheTTL ?? DEFAULT_RESOLVED_TTL,
     };
     if (!Number.isFinite(this.options.timeoutMs) || this.options.timeoutMs < 0) {
-      throw new InvalidEngineOptionError(`timeoutMs must be a non-negative finite number`);
+      throw new InvalidEngineOptionError('timeoutMs must be a non-negative finite number');
     }
+    if (options.resolvedCacheTTL !== undefined && (!Number.isFinite(options.resolvedCacheTTL) || options.resolvedCacheTTL < 0)) {
+      throw new InvalidEngineOptionError('resolvedCacheTTL must be a non-negative finite number or undefined');
+    }
+    this.resolvedCache = new Map();
+  }
+
+  getStore(): PolicyReader {
+    return this.store;
+  }
+
+  getCacheStats(): EngineCacheStats {
+    return {
+      resolvedRoles: {
+        size: this.resolvedCache.size,
+        hits: this.cacheHits,
+        misses: this.cacheMisses,
+      },
+    };
+  }
+
+  clearCache(): void {
+    this.resolvedCache.clear();
+    this.cacheHits = 0;
+    this.cacheMisses = 0;
   }
 
   async check(input: CheckInput): Promise<CheckResult> {
-    this.validateInput(input);
-
-    let roleNames: string[];
-    try {
-      roleNames = await this.store.getUserRoles(input.user.id);
-    } catch (err) {
-      if (this.options.failOpen) {
-        return {
-          allowed: true,
-          reason: 'granted: store unavailable, failOpen=true (SECURITY WARNING)',
-          evaluatedAt: new Date(),
-        };
-      }
-      throw new StoreUnavailableError(err);
-    }
-
-    this.warnRoleHintMismatch(input.user.roles, roleNames);
-
-    if (roleNames.length === 0) {
-      return {
-        allowed: false,
-        reason: `denied: user '${input.user.id}' has no roles`,
-        deniedBy: { type: 'no-roles', detail: `user has no roles in store` },
-        evaluatedAt: new Date(),
-      };
-    }
-
-    const resolved = await this.resolveRoles(roleNames);
-    return this.evaluate(input, resolved);
+    const { result } = await this.evaluate(input);
+    return result;
   }
 
   async checkMany(inputs: CheckInput[]): Promise<CheckResult[]> {
-    // Group by userId, resolve roles once per unique user
     const grouped = new Map<string, { input: CheckInput; idx: number }[]>();
     for (let i = 0; i < inputs.length; i++) {
       const uid = inputs[i].user.id;
@@ -95,10 +112,13 @@ export class Engine {
         this.warnRoleHintMismatch(entries[0].input.user.roles, roleNames);
 
         if (roleNames.length > 0) {
-          const resolved = await this.resolveRoles(roleNames);
+          const resolved = await this.resolver.resolve(roleNames);
+          const index = this.options.useIndex ? buildPermissionIndex(resolved) : null;
+
           for (const { input, idx } of entries) {
             try {
-              results[idx] = await this.evaluate(input, resolved);
+              const { result } = await this.evaluate(input, { resolvedRoles: resolved, index });
+              results[idx] = result;
             } catch (err) {
               results[idx] = {
                 allowed: false,
@@ -113,7 +133,7 @@ export class Engine {
             results[idx] = {
               allowed: false,
               reason: `denied: user '${input.user.id}' has no roles`,
-              deniedBy: { type: 'no-roles', detail: `user has no roles in store` },
+              deniedBy: { type: 'no-roles', detail: 'user has no roles in store' },
               evaluatedAt: new Date(),
             };
           }
@@ -134,24 +154,27 @@ export class Engine {
   }
 
   async filter(input: FilterInput): Promise<FilterResult> {
+    const checkInputs = input.resources.map((resource) => ({
+      user: input.user,
+      resource: input.resourceType,
+      action: input.action,
+      resourceInstance: {
+        id: resource.id,
+        ownerId: resource.ownerId,
+        attributes: resource.attributes,
+      },
+    }));
+
+    const results = await this.checkMany(checkInputs);
+
     const allowed: FilterResult['allowed'] = [];
     const denied: FilterResult['denied'] = [];
 
-    for (const resource of input.resources) {
-      const result = await this.check({
-        user: input.user,
-        resource: input.resourceType,
-        action: input.action,
-        resourceInstance: {
-          id: resource.id,
-          ownerId: resource.ownerId,
-          attributes: resource.attributes,
-        },
-      });
-      if (result.allowed) {
-        allowed.push(resource);
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].allowed) {
+        allowed.push(input.resources[i]);
       } else {
-        denied.push({ id: resource.id, reason: result.reason });
+        denied.push({ id: input.resources[i].id, reason: results[i].reason });
       }
     }
 
@@ -174,61 +197,107 @@ export class Engine {
       throw new StoreUnavailableError(err);
     }
 
-    const resolvedRoles = await this.resolveRoles(roleNames);
+    const resolvedRoles = await this.resolver.resolve(roleNames);
     add('role-resolution', `resolved ${resolvedRoles.length} roles with inheritance`, true);
 
-    const ctx = this.buildEvalContext(input);
-    let bestResult = await this.check(input);
-
-    // Replay permission checks for trace
-    const candidates = this.options.useIndex
-      ? lookupIndex(buildPermissionIndex(resolvedRoles), input.resource, input.action)
-      : resolvedRoles.flatMap((role) =>
-          role.permissions
-            .filter((p) => matchResource(input.resource, p.resource) && matchAction(input.action, p.action))
-            .map((permission) => ({ role, permission })),
-        );
+    const { result, candidates } = await this.evaluate(input, { resolvedRoles });
+    const ctx = buildEvalContext(input, this.options.timeoutMs);
 
     for (const { role, permission } of candidates) {
       add('resource-match', `${permission.resource} === ${input.resource}`, true);
       add('action-match', `${permission.action} === ${input.action}`, true);
 
-      const scopeOk = this.matchScope(input, permission.scope ?? 'any');
-      add('scope', `scope=${permission.scope ?? 'any'}`, scopeOk);
-      if (!scopeOk) continue;
+      const scopeResult = matchScope(permission.scope ?? 'any', ctx);
+      add('scope', `scope=${permission.scope ?? 'any'}`, scopeResult.passed);
 
-      const condOk = await this.matchConditions(ctx, permission);
       if (permission.condition !== undefined) {
-        add('condition', `effect=${permission.effect ?? 'allow'}`, condOk);
+        add('condition', `effect=${permission.effect ?? 'allow'}`, result.allowed);
       }
     }
 
-    add('result', bestResult.reason, bestResult.allowed);
+    add('result', result.reason, result.allowed);
 
-    return { input, steps, result: bestResult };
+    return { input, steps, result };
   }
 
-  // -- evaluate (shared by check + checkMany) ----------------------------
+  // -- Private ---------------------------------------------------------------
 
-  private async evaluate(input: CheckInput, resolvedRoles: Role[]): Promise<CheckResult> {
-    const ctx = this.buildEvalContext(input);
+  private async evaluate(
+    input: CheckInput,
+    opts: { resolvedRoles?: Role[]; index?: PermissionIndex | null } = {},
+  ): Promise<{ result: CheckResult; candidates: IndexedPerm[] }> {
+    this.validateInput(input);
 
-    let bestAllow: { role: Role; permission: Permission } | null = null;
-    let bestDeny: { role: Role; permission: Permission } | null = null;
-    let deniedReason: DeniedBy | null = null;
+    let resolved: Role[];
+    let index: PermissionIndex | null | undefined = opts.index;
 
-    const candidates = this.options.useIndex
-      ? lookupIndex(buildPermissionIndex(resolvedRoles), input.resource, input.action)
-      : resolvedRoles.flatMap((role) =>
+    if (opts.resolvedRoles) {
+      resolved = opts.resolvedRoles;
+    } else {
+      const cached = this.getCachedResolved(input.user.id);
+      if (cached) {
+        resolved = cached.roles;
+        if (index === undefined) index = cached.index;
+      } else {
+        let roleNames: string[];
+        try {
+          roleNames = await this.store.getUserRoles(input.user.id);
+        } catch (err) {
+          if (this.options.failOpen) {
+            return {
+              result: {
+                allowed: true,
+                reason: 'granted: store unavailable, failOpen=true (SECURITY WARNING)',
+                evaluatedAt: new Date(),
+              },
+              candidates: [],
+            };
+          }
+          throw new StoreUnavailableError(err);
+        }
+
+        this.warnRoleHintMismatch(input.user.roles, roleNames);
+
+        if (roleNames.length === 0) {
+          return {
+            result: {
+              allowed: false,
+              reason: `denied: user '${input.user.id}' has no roles`,
+              deniedBy: { type: 'no-roles', detail: 'user has no roles in store' },
+              evaluatedAt: new Date(),
+            },
+            candidates: [],
+          };
+        }
+
+        resolved = await this.resolver.resolve(roleNames);
+        if (index === undefined) index = this.options.useIndex ? buildPermissionIndex(resolved) : null;
+        this.setCachedResolved(input.user.id, resolved, index);
+      }
+    }
+
+    const ctx = buildEvalContext(input, this.options.timeoutMs);
+    if (index === undefined) {
+      index = this.options.useIndex ? buildPermissionIndex(resolved) : null;
+    }
+
+    const candidates = index
+      ? lookupIndex(index, input.resource, input.action)
+      : resolved.flatMap((role) =>
           role.permissions
             .filter((p) => matchResource(input.resource, p.resource) && matchAction(input.action, p.action))
             .map((permission) => ({ role, permission })),
         );
 
+    let bestAllow: { role: Role; permission: Permission } | null = null;
+    let bestDeny: { role: Role; permission: Permission } | null = null;
+    let deniedReason: DeniedBy | null = null;
+
     for (const { role, permission } of candidates) {
-      if (!this.matchScope(input, permission.scope ?? 'any')) {
+      const scopeResult = matchScope(permission.scope ?? 'any', ctx);
+      if (!scopeResult.passed) {
         if (!deniedReason) {
-          deniedReason = { type: 'scope-failed', detail: `scope '${permission.scope}' not satisfied` };
+          deniedReason = { type: 'scope-failed', detail: scopeResult.reason ?? `scope '${permission.scope}' not satisfied` };
         }
         continue;
       }
@@ -238,7 +307,7 @@ export class Engine {
         break;
       }
 
-      const conditionPassed = await this.matchConditions(ctx, permission);
+      const conditionPassed = await this.conditions.evaluate(ctx, permission);
       if (!conditionPassed) {
         if (!deniedReason) {
           deniedReason = { type: 'condition-failed', detail: 'ABAC condition not met' };
@@ -253,201 +322,89 @@ export class Engine {
 
     if (bestDeny) {
       return {
-        allowed: false,
-        reason: `denied: explicit deny by role '${bestDeny.role.name}'`,
-        deniedBy: {
-          type: 'explicit-deny',
-          detail: `permission ${bestDeny.permission.resource}:${bestDeny.permission.action}`,
+        result: {
+          allowed: false,
+          reason: `denied: explicit deny by role '${bestDeny.role.name}'`,
+          deniedBy: {
+            type: 'explicit-deny',
+            detail: `permission ${bestDeny.permission.resource}:${bestDeny.permission.action}`,
+          },
+          evaluatedAt: new Date(),
         },
-        evaluatedAt: new Date(),
+        candidates,
       };
     }
 
     if (bestAllow) {
       return {
-        allowed: true,
-        reason: `granted by role '${bestAllow.role.name}'`,
-        matchedRole: bestAllow.role.name,
-        matchedPermission: {
-          resource: bestAllow.permission.resource,
-          action: bestAllow.permission.action,
-          effect: 'allow',
+        result: {
+          allowed: true,
+          reason: `granted by role '${bestAllow.role.name}'`,
+          matchedRole: bestAllow.role.name,
+          matchedPermission: {
+            resource: bestAllow.permission.resource,
+            action: bestAllow.permission.action,
+            effect: 'allow',
+          },
+          evaluatedAt: new Date(),
         },
-        evaluatedAt: new Date(),
+        candidates,
       };
     }
 
     return {
-      allowed: false,
-      reason: `denied: no matching permission for resource '${input.resource}' action '${input.action}'`,
-      deniedBy: deniedReason ?? {
-        type: 'no-match',
-        detail: `no permission matches resource='${input.resource}' action='${input.action}'`,
+      result: {
+        allowed: false,
+        reason: `denied: no matching permission for resource '${input.resource}' action '${input.action}'`,
+        deniedBy: deniedReason ?? {
+          type: 'no-match',
+          detail: `no permission matches resource='${input.resource}' action='${input.action}'`,
+        },
+        evaluatedAt: new Date(),
       },
-      evaluatedAt: new Date(),
+      candidates,
     };
+  }
+
+  private getCachedResolved(userId: string): { roles: Role[]; index: PermissionIndex | null } | null {
+    const ttl = this.options.resolvedCacheTTL;
+    if (!ttl || ttl <= 0) return null;
+
+    const entry = this.resolvedCache.get(userId);
+    if (!entry) {
+      this.cacheMisses++;
+      return null;
+    }
+    if (Date.now() >= entry.expiresAt) {
+      this.resolvedCache.delete(userId);
+      this.cacheMisses++;
+      return null;
+    }
+    this.cacheHits++;
+    return { roles: entry.roles, index: entry.index };
+  }
+
+  private setCachedResolved(userId: string, roles: Role[], index: PermissionIndex | null): void {
+    const ttl = this.options.resolvedCacheTTL;
+    if (!ttl || ttl <= 0) return;
+
+    this.resolvedCache.set(userId, {
+      roles,
+      index,
+      expiresAt: Date.now() + ttl,
+    });
   }
 
   private warnRoleHintMismatch(hint: string[] | undefined, actual: string[]): void {
     if (this.options.disableRoleHintWarning) return;
     if (!Array.isArray(hint) || hint.length === 0) return;
-    const sorted = (a: string[]) => [...a].sort().join(',');
-    if (sorted(hint) !== sorted(actual)) {
+    const sortJoin = (a: string[]) => [...a].sort().join(',');
+    if (sortJoin(hint) !== sortJoin(actual)) {
       console.warn(
         `[polycyes] user.roles hint (${hint}) differs from store (${actual}). Store is authoritative.`,
       );
     }
   }
-
-  // -- resolveRoles --------------------------------------------------------
-
-  private async resolveRoles(roleNames: string[]): Promise<Role[]> {
-    // Phase 1: discover ALL roles via batched getRolesByNames — zero individual getRole calls
-    const roleMap = new Map<string, Role>();
-    let frontier = [...new Set(roleNames)];
-
-    while (frontier.length > 0) {
-      const roles = await this.store.getRolesByNames(frontier);
-      for (const role of roles) {
-        if (!roleMap.has(role.name)) {
-          roleMap.set(role.name, role);
-        }
-      }
-
-      const nextFrontier = new Set<string>();
-      for (const role of roles) {
-        if (!role.inherits) continue;
-        for (const parent of role.inherits) {
-          if (!roleMap.has(parent)) {
-            nextFrontier.add(parent);
-          }
-        }
-      }
-
-      frontier = [...nextFrontier];
-    }
-
-    // Phase 2: resolve from complete roleMap, detect cycles
-    const visited = new Set<string>();
-    const resolved: Role[] = [];
-
-    const resolveOne = (name: string, chain: string[]): void => {
-      if (visited.has(name)) return;
-
-      const role = roleMap.get(name);
-      if (!role) return;
-
-      visited.add(name);
-
-      if (role.inherits) {
-        for (const parent of role.inherits) {
-          if (chain.includes(parent)) {
-            throw new CircularRoleHierarchyError([...chain, parent]);
-          }
-          if (chain.length >= MAX_INHERITANCE_DEPTH) {
-            throw new HierarchyTooDeepError([...chain, parent]);
-          }
-          resolveOne(parent, [...chain, parent]);
-        }
-      }
-
-      if (!resolved.some((r) => r.name === role.name)) {
-        resolved.push(role);
-      }
-    };
-
-    for (const name of roleNames) {
-      resolveOne(name, [name]);
-    }
-
-    return resolved;
-  }
-
-  // -- scope ---------------------------------------------------------------
-
-  private matchScope(input: CheckInput, scope: Permission['scope']): boolean {
-    if (scope === 'any' || scope === 'none') return true;
-    if (typeof scope === 'function') {
-      return scope(this.buildEvalContext(input));
-    }
-    if (scope === 'own') {
-      if (!input.resourceInstance?.ownerId) return false;
-      return input.resourceInstance.ownerId === input.user.id;
-    }
-    return false;
-  }
-
-  // -- conditions ----------------------------------------------------------
-
-  private async matchConditions(ctx: EvalContext, permission: Permission): Promise<boolean> {
-    if (permission.condition === undefined) return true;
-
-    const conditions = Array.isArray(permission.condition)
-      ? permission.condition
-      : [permission.condition];
-
-    if (conditions.length === 0) {
-      throw new EmptyConditionArrayError(permission);
-    }
-
-    const mode = permission.conditionMode ?? 'all';
-    const timeoutMs = ctx.timeoutMs ?? this.options.timeoutMs;
-
-    try {
-      const results = await Promise.all(
-        conditions.map(async (c) => {
-          const raw = timeoutMs > 0
-            ? await Promise.race([
-                Promise.resolve(c(ctx)),
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new ConditionTimeoutError(permission, timeoutMs)), timeoutMs),
-                ),
-              ])
-            : await c(ctx);
-          if (typeof raw !== 'boolean') {
-            throw new ConditionEvaluationError(
-              permission,
-              new TypeError(`Condition returned ${typeof raw}, expected boolean`),
-            );
-          }
-          return raw;
-        }),
-      );
-      return mode === 'all' ? results.every(Boolean) : results.some(Boolean);
-    } catch (err) {
-      if (err instanceof ConditionTimeoutError) throw err;
-      if (err instanceof EmptyConditionArrayError) throw err;
-      if (err instanceof ConditionEvaluationError) throw err;
-      throw new ConditionEvaluationError(permission, err);
-    }
-  }
-
-  // -- context -------------------------------------------------------------
-
-  private buildEvalContext(input: CheckInput): EvalContext {
-    const s = sanitizeInput(input);
-
-    const ctx: EvalContext = {
-      user: deepFreeze({ ...s.user, attributes: deepFreeze({ ...s.user.attributes }) }),
-      resource: s.resource,
-      action: s.action,
-      resourceInstance: s.resourceInstance
-        ? deepFreeze({ ...s.resourceInstance, attributes: deepFreeze({ ...s.resourceInstance.attributes }) })
-        : undefined,
-      metadata: s.metadata ? deepFreeze({ ...s.metadata }) : undefined,
-      timeoutMs: this.options.timeoutMs,
-      get userAttributes() {
-        return this.user.attributes;
-      },
-      get resourceAttributes() {
-        return this.resourceInstance?.attributes;
-      },
-    };
-
-    return ctx;
-  }
-
-  // -- validation ----------------------------------------------------------
 
   private validateInput(input: CheckInput): void {
     if (!input.user?.id || typeof input.user.id !== 'string' || !input.user.id.trim()) {
@@ -462,7 +419,40 @@ export class Engine {
   }
 }
 
-// -- module-level helpers --------------------------------------------------
+// -- Factory ----------------------------------------------------------------
+
+export function createEngine(store: PolicyReader, options?: EngineOptions): Engine {
+  return new Engine(store, options);
+}
+
+// -- Module-level helpers ---------------------------------------------------
+
+function buildEvalContext(input: CheckInput, timeoutMs: number): EvalContext {
+  const s = sanitizeInput(input);
+
+  return {
+    user: Object.freeze({
+      ...s.user,
+      attributes: s.user.attributes ? Object.freeze({ ...s.user.attributes }) : undefined,
+    }),
+    resource: s.resource,
+    action: s.action,
+    resourceInstance: s.resourceInstance
+      ? Object.freeze({
+          ...s.resourceInstance,
+          attributes: s.resourceInstance.attributes ? Object.freeze({ ...s.resourceInstance.attributes }) : undefined,
+        })
+      : undefined,
+    metadata: s.metadata,
+    timeoutMs,
+    get userAttributes() {
+      return this.user.attributes;
+    },
+    get resourceAttributes() {
+      return this.resourceInstance?.attributes;
+    },
+  };
+}
 
 function matchResource(inputResource: string, permResource: string): boolean {
   return permResource === '*' || permResource === inputResource;
@@ -472,27 +462,35 @@ function matchAction(inputAction: string, permAction: string): boolean {
   return permAction === '*' || permAction === inputAction;
 }
 
-function deepFreeze<T>(obj: T): T {
-  if (obj && typeof obj === 'object' && !Object.isFrozen(obj)) {
-    for (const value of Object.values(obj as object)) {
-      deepFreeze(value);
-    }
-    Object.freeze(obj);
+function matchScope(scope: Permission['scope'], ctx: EvalContext): { passed: boolean; reason?: string } {
+  if (scope === 'any' || scope === 'none') return { passed: true };
+  if (typeof scope === 'function') {
+    const result = scope(ctx);
+    return result ? { passed: true } : { passed: false, reason: 'scope function returned false' };
   }
-  return obj;
+  if (scope === 'own') {
+    if (!ctx.resourceInstance?.ownerId) return { passed: false, reason: 'scope own: no resource owner' };
+    if (ctx.resourceInstance.ownerId !== ctx.user.id) return { passed: false, reason: 'scope own: user is not the owner' };
+    return { passed: true };
+  }
+  return { passed: false, reason: `unknown scope: ${String(scope)}` };
 }
 
-const DANGEROUS_KEYS = ['__proto__', 'constructor', 'prototype'];
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function sanitizeInput(input: CheckInput): CheckInput {
-  function strip(obj: Record<string, unknown>): Record<string, unknown> {
-    for (const key of DANGEROUS_KEYS) delete obj[key];
-    for (const value of Object.values(obj)) {
-      if (value && typeof value === 'object' && !Array.isArray(value)) {
-        strip(value as Record<string, unknown>);
+  function deepClean(value: unknown): unknown {
+    if (value === null || value === undefined || typeof value !== 'object') return value;
+    if (Array.isArray(value)) return value.map(deepClean);
+
+    const obj = value as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(obj)) {
+      if (!DANGEROUS_KEYS.has(key)) {
+        result[key] = deepClean(obj[key]);
       }
     }
-    return obj;
+    return result;
   }
 
   return {
@@ -500,27 +498,24 @@ function sanitizeInput(input: CheckInput): CheckInput {
     user: {
       ...input.user,
       attributes: input.user.attributes
-        ? strip({ ...input.user.attributes }) as Record<string, unknown>
+        ? deepClean(input.user.attributes) as Record<string, unknown>
         : undefined,
     },
     resourceInstance: input.resourceInstance
       ? {
           ...input.resourceInstance,
           attributes: input.resourceInstance.attributes
-            ? strip({ ...input.resourceInstance.attributes }) as Record<string, unknown>
+            ? deepClean(input.resourceInstance.attributes) as Record<string, unknown>
             : undefined,
         }
       : undefined,
     metadata: input.metadata
-      ? strip({ ...input.metadata }) as Record<string, unknown>
+      ? deepClean(input.metadata) as Record<string, unknown>
       : undefined,
   };
 }
 
-// -- permission index (O(1) lookup) ---------------------------------------
-
-type IndexedPerm = { role: Role; permission: Permission };
-type PermissionIndex = Map<string, Map<string, IndexedPerm[]>>;
+// -- permission index (O(1) lookup) -----------------------------------------
 
 function buildPermissionIndex(roles: Role[]): PermissionIndex {
   const index: PermissionIndex = new Map();

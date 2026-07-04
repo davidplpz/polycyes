@@ -59,12 +59,14 @@ console.log(result.reason);  // "granted by role 'editor'"
 - **Batch** — `engine.checkMany()` with per-user role caching
 - **Filter** — `engine.filter()` for row-level security
 - **Debug** — `engine.debug()` returns `DebugTrace` with per-step evaluation
-- **Cache** — `CachedPolicyStore` with configurable TTL, auto-invalidation, and concurrent request dedup
+- **Store cache** — `CachedPolicyStore` with configurable TTL, auto-invalidation, and concurrent request dedup
+- **Engine cache** — per-user resolved roles cache with configurable TTL (1000ms default)
 - **Decorators** — `LoggingPolicyStore`, `MetricsPolicyStore`, `FailOpenPolicyStore` (composable)
+- **Incremental roles** — `addUserRole`/`removeUserRole` for granular role assignments
 - **No N+1** — `resolveRoles()` discovers parent roles in batch, zero individual `getRole()` calls
 - **Typed errors** — `ConditionEvaluationError`, `StoreUnavailableError`, `InvalidEngineOptionError`, etc.
 - **Audit** — `auditRole()` detects god-mode wildcards without conditions
-- **Deep freeze** — immutable context prevents side effects in conditions
+- **Context freeze** — immutable context prevents side effects in conditions
 - **Timeout** — conditions use `Promise.race` with 1000ms default (0 = no timeout)
 - **Tree-shakeable** — `"sideEffects": false` + subpath exports
 - **Branded types** — `UserId`, `RoleName`, `ResourceName`, `ActionName`
@@ -159,8 +161,8 @@ Tracks call count, total time, and errors per method.
 
 ### FailOpenPolicyStore
 
-Implements `PolicyReader` only. Returns `null`/`[]` on store errors instead of
-propagating. For cases where auth should never break the app.
+Implements `PolicyStore` (full read + write). Reads return `null`/`[]` on store errors.
+Writes delegate directly to the inner store. For cases where auth should never break the app.
 
 ## Express Adapter
 
@@ -183,11 +185,18 @@ app.delete('/posts/:id', authz(engine, {
 
 ```ts
 const engine = new Engine(store, options?);
+// or
+const engine = createEngine(store, options?);
 
 await engine.check(input): Promise<CheckResult>
 await engine.checkMany(inputs): Promise<CheckResult[]>
 await engine.filter(input): Promise<FilterResult>
 await engine.debug(input): Promise<DebugTrace>
+
+// Monitoring
+engine.getStore(): PolicyReader
+engine.getCacheStats(): EngineCacheStats  // { resolvedRoles: { size, hits, misses } }
+engine.clearCache(): void                 // flush resolved cache + reset stats
 ```
 
 ### `EngineOptions`
@@ -195,6 +204,7 @@ await engine.debug(input): Promise<DebugTrace>
 ```ts
 {
   timeoutMs?: number;          // default 1000, 0 = no timeout
+  resolvedCacheTTL?: number;   // per-user resolved cache TTL (default 1000, 0 = disabled)
   failOpen?: boolean;          // default false (DANGEROUS)
   useIndex?: boolean;          // default true (O(1) permission lookup)
   disableRoleHintWarning?: boolean; // default false
@@ -217,6 +227,8 @@ interface PolicyWriter {
   updateRole(role: Role): Promise<void>;
   deleteRole(name: string): Promise<void>;
   setUserRoles(userId: string, roleNames: string[]): Promise<void>;
+  addUserRole(userId: string, roleName: string): Promise<void>;
+  removeUserRole(userId: string, roleName: string): Promise<void>;
 }
 
 interface PolicyStore extends PolicyReader, PolicyWriter {}

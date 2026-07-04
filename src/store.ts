@@ -44,6 +44,12 @@ export interface PolicyWriter {
 
   /** Asigna roles a un usuario (reemplaza asignación anterior). */
   setUserRoles(userId: string, roleNames: string[]): Promise<void>;
+
+  /** Agrega un rol a un usuario. No-op si ya lo tiene. Error si el rol no existe. */
+  addUserRole(userId: string, roleName: string): Promise<void>;
+
+  /** Remueve un rol de un usuario. No-op si no lo tiene. */
+  removeUserRole(userId: string, roleName: string): Promise<void>;
 }
 
 /**

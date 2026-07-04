@@ -73,6 +73,14 @@ export class LoggingPolicyStore implements PolicyStore {
     return this.trace('setUserRoles', [userId, roleNames], () => this.inner.setUserRoles(userId, roleNames));
   }
 
+  async addUserRole(userId: string, roleName: string): Promise<void> {
+    return this.trace('addUserRole', [userId, roleName], () => this.inner.addUserRole(userId, roleName));
+  }
+
+  async removeUserRole(userId: string, roleName: string): Promise<void> {
+    return this.trace('removeUserRole', [userId, roleName], () => this.inner.removeUserRole(userId, roleName));
+  }
+
   private async trace<T>(method: string, args: unknown[], fn: () => Promise<T>): Promise<T> {
     const start = performance.now();
     try {
@@ -110,6 +118,8 @@ export interface StoreMetrics {
   updateRole: MethodMetrics;
   deleteRole: MethodMetrics;
   setUserRoles: MethodMetrics;
+  addUserRole: MethodMetrics;
+  removeUserRole: MethodMetrics;
 }
 
 function emptyMetrics(): MethodMetrics {
@@ -126,6 +136,8 @@ export class MetricsPolicyStore implements PolicyStore {
     updateRole: emptyMetrics(),
     deleteRole: emptyMetrics(),
     setUserRoles: emptyMetrics(),
+    addUserRole: emptyMetrics(),
+    removeUserRole: emptyMetrics(),
   };
 
   constructor(inner: PolicyStore) {
@@ -160,6 +172,14 @@ export class MetricsPolicyStore implements PolicyStore {
     return this.measure('setUserRoles', () => this.inner.setUserRoles(userId, roleNames));
   }
 
+  async addUserRole(userId: string, roleName: string): Promise<void> {
+    return this.measure('addUserRole', () => this.inner.addUserRole(userId, roleName));
+  }
+
+  async removeUserRole(userId: string, roleName: string): Promise<void> {
+    return this.measure('removeUserRole', () => this.inner.removeUserRole(userId, roleName));
+  }
+
   getMetrics(): StoreMetrics {
     return {
       getRole: { ...this.metrics.getRole },
@@ -169,6 +189,8 @@ export class MetricsPolicyStore implements PolicyStore {
       updateRole: { ...this.metrics.updateRole },
       deleteRole: { ...this.metrics.deleteRole },
       setUserRoles: { ...this.metrics.setUserRoles },
+      addUserRole: { ...this.metrics.addUserRole },
+      removeUserRole: { ...this.metrics.removeUserRole },
     };
   }
 
@@ -200,10 +222,10 @@ export class MetricsPolicyStore implements PolicyStore {
 // FailOpenPolicyStore
 // ---------------------------------------------------------------------------
 
-export class FailOpenPolicyStore implements PolicyReader {
-  private readonly inner: PolicyReader;
+export class FailOpenPolicyStore implements PolicyStore {
+  private readonly inner: PolicyStore;
 
-  constructor(inner: PolicyReader) {
+  constructor(inner: PolicyStore) {
     this.inner = inner;
   }
 
@@ -229,5 +251,29 @@ export class FailOpenPolicyStore implements PolicyReader {
     } catch {
       return [];
     }
+  }
+
+  async addRole(role: Role): Promise<void> {
+    await this.inner.addRole(role);
+  }
+
+  async updateRole(role: Role): Promise<void> {
+    await this.inner.updateRole(role);
+  }
+
+  async deleteRole(name: string): Promise<void> {
+    await this.inner.deleteRole(name);
+  }
+
+  async setUserRoles(userId: string, roleNames: string[]): Promise<void> {
+    await this.inner.setUserRoles(userId, roleNames);
+  }
+
+  async addUserRole(userId: string, roleName: string): Promise<void> {
+    await this.inner.addUserRole(userId, roleName);
+  }
+
+  async removeUserRole(userId: string, roleName: string): Promise<void> {
+    await this.inner.removeUserRole(userId, roleName);
   }
 }

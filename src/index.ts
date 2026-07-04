@@ -2,7 +2,8 @@
 // polycyes — Public API
 // ============================================================================
 
-export { Engine } from './engine.js';
+export { Engine, createEngine } from './engine.js';
+export type { EngineCacheStats } from './engine.js';
 export { InMemoryPolicyStore } from './memory-store.js';
 export { CachedPolicyStore } from './cached-store.js';
 export type { CachedPolicyStoreOptions, CacheStats } from './cached-store.js';

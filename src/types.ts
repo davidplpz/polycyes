@@ -129,9 +129,7 @@ export type ConditionMode = 'all' | 'any';
  * ]
  * ```
  */
-export type Condition =
-  | ((ctx: EvalContext) => boolean | Promise<boolean>)
-  | ((ctx: EvalContext) => boolean | Promise<boolean>)[];
+export type Condition = (ctx: EvalContext) => boolean | Promise<boolean>;
 
 /**
  * Define un permiso atómico dentro de un rol.
@@ -184,9 +182,9 @@ export interface Permission {
   /**
    * Condición ABAC opcional. Si se define, debe evaluar a `true` para
    * que el permiso se conceda. La condición se evalúa DESPUÉS del scope.
-   * Puede ser una función única o un array.
+   * Puede ser una función única o un array (se normaliza internamente).
    */
-  condition?: Condition;
+  condition?: Condition | Condition[];
 
   /**
    * Modo de evaluación para condiciones múltiples.
@@ -400,6 +398,13 @@ export interface EngineOptions {
 
   /** Si true, usa permission index para matching O(1) (default: true) */
   useIndex?: boolean;
+
+  /**
+   * TTL en ms para cache de roles resueltos por userId (default: 1000, 0 = disabled).
+   * Evita re-resolver herencia de roles en check() consecutivas para el mismo usuario.
+   * La cache se invalida por tiempo, no por cambios en el store.
+   */
+  resolvedCacheTTL?: number;
 }
 
 // ---------------------------------------------------------------------------

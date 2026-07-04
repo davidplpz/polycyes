@@ -5,6 +5,7 @@ import type {
   PolicyStore,
 } from '../src/store.js';
 import type { Role } from '../src/types.js';
+import { role } from '../src/helpers.js';
 
 class MinimalStore implements PolicyStore {
   private roles = new Map<string, Role>();
@@ -241,6 +242,70 @@ describe('InMemoryPolicyStore', () => {
       } finally {
         console.warn = orig;
       }
+    });
+  });
+
+  describe('Incremental user role management', () => {
+    it('MUST add a role to a user', async () => {
+      const store = new InMemoryPolicyStore({ strictMode: false });
+
+      await store.addRole(role('viewer'));
+      await store.setUserRoles('u1', []);
+      await store.addUserRole('u1', 'viewer');
+
+      const roles = await store.getUserRoles('u1');
+      expect(roles).toEqual(['viewer']);
+    });
+
+    it('MUST NOT duplicate on addUserRole when already present', async () => {
+      const store = new InMemoryPolicyStore({ strictMode: false });
+
+      await store.addRole(role('viewer'));
+      await store.setUserRoles('u1', ['viewer']);
+      await store.addUserRole('u1', 'viewer');
+
+      const roles = await store.getUserRoles('u1');
+      expect(roles).toEqual(['viewer']);
+    });
+
+    it('MUST throw RoleNotFoundError on addUserRole for non-existent role', async () => {
+      const store = new InMemoryPolicyStore({ strictMode: false });
+
+      await store.setUserRoles('u1', []);
+      await expect(store.addUserRole('u1', 'nonexistent')).rejects.toThrow('not found');
+    });
+
+    it('MUST remove a role from a user', async () => {
+      const store = new InMemoryPolicyStore({ strictMode: false });
+
+      await store.addRole(role('viewer'));
+      await store.addRole(role('editor'));
+      await store.setUserRoles('u1', ['viewer', 'editor']);
+      await store.removeUserRole('u1', 'viewer');
+
+      const roles = await store.getUserRoles('u1');
+      expect(roles).toEqual(['editor']);
+    });
+
+    it('MUST be no-op on removeUserRole for non-existent role', async () => {
+      const store = new InMemoryPolicyStore({ strictMode: false });
+
+      await store.addRole(role('viewer'));
+      await store.setUserRoles('u1', ['viewer']);
+      await store.removeUserRole('u1', 'nonexistent');
+
+      const roles = await store.getUserRoles('u1');
+      expect(roles).toEqual(['viewer']);
+    });
+
+    it('MUST be no-op on removeUserRole for user with no roles', async () => {
+      const store = new InMemoryPolicyStore({ strictMode: false });
+
+      await store.setUserRoles('u1', []);
+      await store.removeUserRole('u1', 'viewer');
+
+      const roles = await store.getUserRoles('u1');
+      expect(roles).toEqual([]);
     });
   });
 });
