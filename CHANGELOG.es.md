@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 (2026-07-11)
+
+### Added
+
+- **NestJS adapter** — `polycyes/nestjs` con `PolycyesModule` (global, `forRoot`), `PolycyesGuard` (lee metadata de `@Permissions`, passthrough si no hay decorator o contexto no-HTTP), decorator `@Permissions(resource, action)`, y extractores custom (`getUser`, `getResourceInstance`, `getMetadata`). Peer deps: `@nestjs/common` y `@nestjs/core` (opcionales).
+- **Tipo `NestjsRequest`** — exportado desde `polycyes/nestjs` para tipear extractores custom.
+
+### Changed
+
+- Guard usa `Reflect.getMetadata` directo en vez de inyectar `Reflector` (más simple, funciona en `Test.createTestingModule` sin providers extra).
+- Decorator `@Permissions` usa `Reflect.defineMetadata` directo en vez de `SetMetadata` de `@nestjs/common` (evita edge cases de reflect-metadata en vitest).
+
 ## 0.2.0 (2026-07-11)
 
 ### Added
