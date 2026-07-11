@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-07-11)
 
 ### Added
 
@@ -8,18 +8,21 @@
 - **Store decorators** — Composable wrappers: `LoggingPolicyStore` (configurable logging with timing), `MetricsPolicyStore` (call count + totalMs + errors per method), `FailOpenPolicyStore` (returns null/[] on store errors). Export: `polycyes/store-decorators`
 - **Batch resolveRoles** — 2-phase algorithm eliminates N+1 on role inheritance. Phase 1 discovers all parent roles via iterative `getRolesByNames` (batched), Phase 2 resolves synchronously. Zero individual `getRole()` calls during resolution.
 - **`timeoutMs: 0`** — Engine now accepts `timeoutMs: 0` as "no timeout". Conditions execute without `Promise.race` overhead. Negative values throw `InvalidEngineOptionError`.
-- **SRP refactor** — `RoleResolver` (batch role resolution with cycle detection) and `ConditionEvaluator` (timeout, mode, error wrapping) extracted from `Engine`. Cleaner separation of concerns.
-- **`createEngine()` factory** — `createEngine(store, opts?)` convenience function exported from `polycyes`. Same as `new Engine(store, opts)`.
-- **Engine monitoring API** — `getStore()` returns the underlying `PolicyReader`, `getCacheStats()` returns hit/miss/size stats, `clearCache()` flushes the engine-level resolved cache.
-- **`EngineOptions.resolvedCacheTTL`** — Engine-level cache for resolved roles. TTL in ms (default 1000, `0` disables). Avoids re-resolving role inheritance on consecutive `check()` calls for the same user.
-- **`addUserRole()` / `removeUserRole()`** — Incremental role management in `PolicyWriter`. Grants/revokes a single role without replacing all user roles. Implemented in `InMemoryPolicyStore`, `CachedPolicyStore`, and all decorators.
-- **`engine.filter()` via `checkMany()`** — `filter()` now delegates to `checkMany()` internally = 1 store fetch for all resources, not N.
-- **`matchScope()` structured result** — Returns `{ passed: boolean, reason?: string }` with specific error messages.
-- **Spanish docs** — `README.es.md` + `CHANGELOG.es.md` with full documentation in Spanish
+- **`addUserRole` / `removeUserRole`** — incremental role management on `PolicyWriter`. `addUserRole(userId, roleName)` appends a role, `removeUserRole(userId, roleName)` removes it. All 5 store implementations support it.
+- **`createEngine()` factory** — one-liner: `const engine = createEngine(store, options?)`. Convenience wrapper around `new Engine(store, options)`.
+- **Resolved cache** — `EngineOptions.resolvedCacheTTL` (default 0). Caches resolved role chains per userId to avoid repeated `getRolesByNames` + inheritance resolution on consecutive `check()` calls for the same user.
+- **`engine.getStore()`** — exposes the underlying `PolicyReader` for diagnostic access.
+- **Express async middleware** — `polycyes/express` `authz()` now supports async resource/action/resourceInstance mappers.
+- **Integration tests** — `test/integration.test.ts`: decorator chain (InMemory→Cached→Metrics), addUserRole/removeUserRole flow, checkMany, filter.
+- **Benchmark tests** — `test/benchmark.test.ts`: `check()` throughput (500 ops), `checkMany` vs N×`check` (50 inputs), CachedPolicyStore vs plain store comparison.
+- **Property tests** — 8 new invariants: `checkMany` equivalence, `addUserRole`/`removeUserRole` idempotent/reversible/safe, resolved cache on/off equivalence.
+- **Spanish docs** — `README.es.md` + `CHANGELOG.es.md` with full documentation in Spanish.
+- **`engines` field** — `"node": ">=20"` in `package.json`.
 
 ### Changed
 
-- Engine constructor now throws `InvalidEngineOptionError` instead of bare `Error` for invalid options
+- Engine constructor now throws `InvalidEngineOptionError` instead of bare `Error` for invalid options.
+- CI matrix: dropped Node 18 (EOL, incompatible with rolldown in Vitest 3.x), now runs on Node 20 and 22.
 - **Cache-before-store in `evaluate()`** — resolved cache checked BEFORE `getUserRoles()`. Cache hit eliminates the store call entirely.
 - **Shallow freeze replaces deepFreeze** — `Object.freeze` on `user`, `user.attributes`, `resourceInstance`, `resourceInstance.attributes` only. Same protection, no hot-path allocation.
 - **`debug()` single evaluation** — calls `evaluate()` once and reuses the result. No more double condition evaluation.
