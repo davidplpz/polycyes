@@ -71,6 +71,7 @@ console.log(result.reason);  // "granted by role 'editor'"
 - **Tree-shakeable** — `"sideEffects": false` + subpath exports
 - **Branded types** — `UserId`, `RoleName`, `ResourceName`, `ActionName`
 - **Express adapter** — `polycyes/express` with `authz()` middleware
+- **NestJS adapter** — `polycyes/nestjs` with `PolycyesModule`, `PolycyesGuard`, `@Permissions`
 
 ## ABAC Example
 
@@ -179,7 +180,70 @@ app.delete('/posts/:id', authz(engine, {
 }), controller);
 ```
 
-## API
+## NestJS Adapter
+
+```bash
+npm install polycyes @nestjs/common @nestjs/core
+```
+
+### Module Setup
+
+```ts
+import { Module } from '@nestjs/common';
+import { Engine, InMemoryPolicyStore } from 'polycyes';
+import { PolycyesModule } from 'polycyes/nestjs';
+
+const store = new InMemoryPolicyStore();
+const engine = new Engine(store);
+
+@Module({
+  imports: [PolycyesModule.forRoot(engine)],
+})
+export class AppModule {}
+```
+
+### Guard Usage
+
+```ts
+import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
+import { PolycyesGuard, Permissions } from 'polycyes/nestjs';
+
+@Injectable()
+export class AuthGuard extends PolycyesGuard {}
+
+@Controller('posts')
+export class PostsController {
+  @Get()
+  @Permissions('post', 'read')
+  async findAll() { /* ... */ }
+
+  @Post()
+  @Permissions('post', 'create')
+  async create() { /* ... */ }
+
+  @Delete(':id')
+  @Permissions('post', 'delete')
+  async remove(@Param('id') id: string) { /* ... */ }
+}
+```
+
+### Custom User Extractor
+
+By default, `PolycyesGuard` reads `req.user`. Override with `getUser`:
+
+```ts
+PolycyesModule.forRoot(engine, {
+  getUser: (req) => user(req.user.sub),  // from JWT
+  getResourceInstance: (req) => ({ id: req.params.id, ownerId: req.post.authorId }),
+  getMetadata: (req) => ({ ip: req.ip }),
+})
+```
+
+### Subpath Export
+
+```
+polycyes/nestjs              → PolycyesModule, PolycyesGuard, Permissions
+```
 
 ### `Engine`
 
@@ -247,6 +311,7 @@ polycyes/memory-store        → InMemoryPolicyStore
 polycyes/cached-store        → CachedPolicyStore + CachedPolicyStoreOptions + CacheStats
 polycyes/store-decorators    → LoggingPolicyStore, MetricsPolicyStore, FailOpenPolicyStore
 polycyes/express             → authz(), ExpressAuthzMapper
+polycyes/nestjs              → PolycyesModule, PolycyesGuard, Permissions
 ```
 
 ## License

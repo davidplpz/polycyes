@@ -10,6 +10,9 @@ export type { CachedPolicyStoreOptions, CacheStats } from './cached-store.js';
 export { LoggingPolicyStore, MetricsPolicyStore, FailOpenPolicyStore } from './store-decorators.js';
 export type { LoggingPolicyStoreOptions, StoreMetrics } from './store-decorators.js';
 
+export { PolycyesModule, PolycyesGuard, Permissions } from './nestjs/index.js';
+export type { PolycyesModuleOptions, PermissionMetadata } from './nestjs/index.js';
+
 export type { PolicyReader, PolicyWriter, PolicyStore } from './store.js';
 
 export type {
